@@ -1,7 +1,8 @@
+using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
+using QuotationManagement.API.Data;
 using QuotationManagement.API.Models;
 using QuotationManagement.API.Services;
-using QuotationManagement.API.Data;
 
 namespace QuotationManagement.API.CQRS.Handlers
 {
@@ -9,42 +10,66 @@ namespace QuotationManagement.API.CQRS.Handlers
     {
         private readonly AppDbContext _context;
         private readonly CacheServices _cacheService;
+        private readonly ILogger<QuoteQueryHandler> _logger;
 
-        public QuoteQueryHandler(AppDbContext context, CacheServices cacheService)
+        public QuoteQueryHandler(
+            AppDbContext context,
+            CacheServices cacheService,
+            ILogger<QuoteQueryHandler> logger)
         {
-            _context = context;
-            _cacheService = cacheService;
+            _context = context ?? throw new ArgumentNullException(nameof(context));
+            _cacheService = cacheService ?? throw new ArgumentNullException(nameof(cacheService));
+            _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         }
 
-        // ✅ Get all quotes
         public async Task<List<Quote>> GetAllQuotes()
         {
-            return await _context.Quotes.Include(q => q.LineItems).ToListAsync();
+            try
+            {
+                return await _context.Quotes
+                    .AsNoTracking()
+                    .Include(q => q.LineItems)
+                    .ToListAsync();
+            }
+            catch (SqlException ex)
+            {
+                _logger.LogError(ex, "SQL error occurred while loading all quotes.");
+                throw new InvalidOperationException("Database error while loading quotes.", ex);
+            }
         }
 
-        // ✅ Get quote by ID
         public async Task<Quote?> GetQuoteById(int id)
         {
-            return await _context.Quotes
-                .Include(q => q.LineItems)
-                .FirstOrDefaultAsync(q => q.QuoteId == id);
+            try
+            {
+                return await _context.Quotes
+                    .AsNoTracking()
+                    .Include(q => q.LineItems)
+                    .FirstOrDefaultAsync(q => q.QuoteId == id);
+            }
+            catch (SqlException ex)
+            {
+                _logger.LogError(ex, "SQL error occurred while loading quote {QuoteId}", id);
+                throw new InvalidOperationException("Database error while loading quote details.", ex);
+            }
         }
 
-        // ✅ Analytics with Redis caching
         public async Task<object> GetAnalytics()
         {
-            string cacheKey = "analytics_cache";
+            const string cacheKey = "analytics_cache";
 
-// Try Redis first
-            var cachedAnalytics = await _cacheService.GetCacheAsync<object>(cacheKey);  // no change needed
+            var cachedAnalytics = await _cacheService.GetCacheAsync<object>(cacheKey);
             if (cachedAnalytics != null)
             {
-                Console.WriteLine("✅ Analytics served from Redis cache");
+                _logger.LogInformation("Analytics served from cache.");
                 return cachedAnalytics;
             }
 
-// Compute analytics from DB
-            var allQuotes = await _context.Quotes.Include(q => q.LineItems).ToListAsync();
+            var allQuotes = await _context.Quotes
+                .AsNoTracking()
+                .Include(q => q.LineItems)
+                .ToListAsync();
+
             var totalQuotes = allQuotes.Count;
             var totalValue = allQuotes.Sum(q => q.LineItems.Sum(i => i.UnitPrice * i.Quantity - i.Discount));
             var acceptedCount = allQuotes.Count(q => q.Status == "Accepted");
@@ -57,12 +82,9 @@ namespace QuotationManagement.API.CQRS.Handlers
                 totalValue,
                 avgValue,
                 successRate
-            
             };
 
-// Save to Redis as string
-            await _cacheService.SetCacheAsync(cacheKey, analytics, TimeSpan.FromMinutes(5));  // ⚡ fixed
-
+            await _cacheService.SetCacheAsync(cacheKey, analytics, TimeSpan.FromMinutes(5));
             return analytics;
         }
     }
