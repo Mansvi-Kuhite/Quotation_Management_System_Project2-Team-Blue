@@ -1,0 +1,6 @@
+@QuotationManagement.API_HostAddress = http://localhost:5283
+
+GET {{QuotationManagement.API_HostAddress}}/api/Quotation
+Content-Type: : application/json
+
+###
