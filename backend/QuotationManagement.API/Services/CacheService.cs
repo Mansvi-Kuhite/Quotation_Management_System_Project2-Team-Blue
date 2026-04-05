@@ -6,13 +6,12 @@ namespace QuotationManagement.API.Services
 {
     public class CacheServices
     {
-        private readonly IDistributedCache _cache;
-
-        private readonly IDatabase _db;
+        private readonly IDistributedCache? _cache;
+        private readonly IDatabase? _db;
 
         public CacheServices(IConnectionMultiplexer redis)
         {
-            _db = redis.GetDatabase(); // ✅ initialize _db
+            _db = redis.GetDatabase();
         }
 
         public CacheServices(IDistributedCache cache)
@@ -20,30 +19,42 @@ namespace QuotationManagement.API.Services
             _cache = cache;
         }
 
-        // Get cache, returns null if key not found
-    
+        public CacheServices()
+        {
+            // Fallback mode when no cache provider is available.
+        }
 
-        // Set cache as string
+        // Get cache, returns null if key not found
         public async Task SetCacheAsync<T>(string key, T value, TimeSpan? expiry = null)
         {
-            string json = JsonSerializer.Serialize(value); // convert object to JSON string
-            await _db.StringSetAsync(key, json, expiry);   // ⚡ store as string
+            if (_db == null) return;
 
+            string json = JsonSerializer.Serialize(value);
+            await _db.StringSetAsync(key, json, expiry);
         }
 
         public async Task<T?> GetCacheAsync<T>(string key)
         {
-            var value = await _db.StringGetAsync(key);     // ⚡ read as string
+            if (_db == null) return default;
+
+            var value = await _db.StringGetAsync(key);
             if (value.IsNullOrEmpty) return default;
-            return JsonSerializer.Deserialize<T>(value);  // convert JSON back to object
+            return JsonSerializer.Deserialize<T>(value!);
         }
-
-
 
         // Remove cache
         public async Task RemoveCacheAsync(string key)
         {
-            await _cache.RemoveAsync(key);
+            if (_cache != null)
+            {
+                await _cache.RemoveAsync(key);
+                return;
+            }
+
+            if (_db != null)
+            {
+                await _db.KeyDeleteAsync(key);
+            }
         }
     }
 }
